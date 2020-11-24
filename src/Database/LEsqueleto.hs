@@ -21,11 +21,29 @@ import Language.Haskell.TH.Quote
 import LMonad.TCB
 
 import Database.LEsqueleto.LSql
+    ( C(CDouble, CBool, CString, CInt),
+      B(..),
+      BinOp(BinL, BinEq, BinNEq, BinGE, BinG, BinLE),
+      BExpr(..),
+      TermField(FieldAll, Field),
+      Term(..),
+      Offset(Offset),
+      Limit(Limit),
+      Order(OrderDesc, OrderAsc),
+      OrderBy(OrderBy),
+      Where(Where),
+      Join(FullOuterJoin, LeftOuterJoin, InnerJoin, RightOuterJoin),
+      Tables(..),
+      Terms(Terms, TermsAll),
+      Select(PSelect),
+      Command(Command, commandSelect, commandTables, commandWhere,
+              commandOrderBy, commandLimit, commandOffset),
+      parseCommand )
 import Internal
 
 -- | Generate the quasiquoter function `lsql` that parses the esqueleto DSL.
 mkLSql :: [EntityDef] -> Q [Dec]
-mkLSql ents' = 
+mkLSql ents' =
     let lsql = mkName "lsql" in
     let sig = SigD lsql (ConT ''QuasiQuoter) in
     let ents = mkSerializedLEntityDefs $ map toLEntityDef ents' in
@@ -35,16 +53,16 @@ mkLSql ents' =
     let def' = ValD (VarP lsql') (NormalB (AppE (VarE 'lsqlHelper') ents)) [] in
     return [ sig, def, sig', def']
 
--- | Serialize LEntityDefs so that lsql can access them in other modules. 
+-- | Serialize LEntityDefs so that lsql can access them in other modules.
 -- Ex:
 --
 -- [ LEntityDef "User" [LFieldDef "ident" (FTTypeCon "Text") True Nothing, ...], ...]
 mkSerializedLEntityDefs :: [LEntityDef] -> Exp
-mkSerializedLEntityDefs ents' = 
+mkSerializedLEntityDefs ents' =
     ListE $ List.map mkSerializedLEntityDef ents'
 
     where
-        mkSerializedLEntityDef ent = 
+        mkSerializedLEntityDef ent =
             let str = LitE $ StringL $ lEntityHaskell ent in
             let fields = mkSerializedLFieldsDef $ lEntityFields ent in
             -- if (lEntityHaskell ent) == "User" then
@@ -65,24 +83,24 @@ mkSerializedLEntityDefs ents' =
             FTList typ' ->
                 let typ = mkSerializedFieldType typ' in
                 AppE (ConE 'FTList) typ
-        mkSerializedLabelAnnotation la = case la of 
+        mkSerializedLabelAnnotation la = case la of
             LAId ->
                 ConE 'LAId
             LAConst s ->
                 AppE (ConE 'LAConst) (LitE $ StringL s)
-            LAField s -> 
+            LAField s ->
                 AppE (ConE 'LAField) (LitE $ StringL s)
-        mkSerializedLFieldsDef fields' = 
-            let helper field = 
+        mkSerializedLFieldsDef fields' =
+            let helper field =
                   let name = LitE $ StringL $ lFieldHaskell field in
                   let typ = mkSerializedFieldType $ lFieldType field in
                   let strict = ConE $ if lFieldStrict field then 'True else 'False in
-                  let anns = maybe (ConE 'Nothing) (\( r', w', c') -> 
+                  let anns = maybe (ConE 'Nothing) (\( r', w', c') ->
                             let r = ListE $ map mkSerializedLabelAnnotation r' in
                             let w = ListE $ map mkSerializedLabelAnnotation w' in
                             let c = ListE $ map mkSerializedLabelAnnotation c' in
-                            AppE (ConE 'Just) $ TupE [ r, w, c]
-                        ) $ lFieldLabelAnnotations field 
+                            AppE (ConE 'Just) $ TupE [ Just r, Just w, Just c]
+                        ) $ lFieldLabelAnnotations field
                   in
                   AppE (AppE (AppE (AppE (ConE 'LFieldDef) name) typ) strict) anns
             in
@@ -93,9 +111,17 @@ lsqlHelper ents = QuasiQuoter {
         quoteExp = (generateSql ents) . Text.pack
     }
 
+mkTupEOrExp :: [Exp] -> Exp
+mkTupEOrExp [e] = e
+mkTupEOrExp exprs = TupE (map Just exprs)
+
+mkTupPOrPat :: [Pat] -> Pat
+mkTupPOrPat [p] = p
+mkTupPOrPat pats = TupP pats
+
 generateSql :: [LEntityDef] -> Text -> Q Exp
-generateSql lEntityDefs s = 
-    -- Parse the DSL. 
+generateSql lEntityDefs s =
+    -- Parse the DSL.
     let ast = case parseOnly parseCommand s of
           Left err ->
             error $ "Error parsing lsql statement: " ++ err
@@ -107,31 +133,31 @@ generateSql lEntityDefs s =
           let createAssoc (Tables ts join table _) lvl' =
                 let ( lvl, next, prev) = case join of
                       LeftOuterJoin ->
-                        if lvl' == 0 then 
+                        if lvl' == 0 then
                             ( 1, 0, 1)
                         else
                             ( lvl', lvl' - 1, 0)
                       InnerJoin ->
                         ( lvl', lvl', 0)
-                      RightOuterJoin -> 
+                      RightOuterJoin ->
                         ( lvl', lvl' + 1, 0)
                       FullOuterJoin ->
                         ( lvl' + 1, lvl' + 1, 1)
                 in
                 let ( mapping, correction) = createAssoc ts next in
                 ( ( table, lvl + correction):mapping, prev + correction)
-              createAssoc (Table table) lvl = 
+              createAssoc (Table table) lvl =
                 ( [( table, lvl)], 0)
           in
           let ( mapping, _) = createAssoc (commandTables normalized) (0 :: Int) in
           -- error $ show mapping
-          maybe 
-            (error $ "Could not find table `" ++ tableS ++ "`") 
-            (> 0) 
+          maybe
+            (error $ "Could not find table `" ++ tableS ++ "`")
+            (> 0)
             $ List.lookup tableS mapping
     in
     let protected = (commandSelect normalized) == PSelect in
-    let terms = reqTermsCommand isTableOptional normalized in 
+    let terms = reqTermsCommand isTableOptional normalized in
     -- TODO: Add some check that all the table and field names used match up with existing things?? XXX
     {-
     ...
@@ -151,27 +177,27 @@ generateSql lEntityDefs s =
     do
     -- error $ show ast
     res <- newName "res"
-    let query = 
+    let query =
           let tables = commandTables normalized in
-          let returns = AppE (VarE 'return) $ TupE $ List.map (\rterm -> case rterm of
+          let returns = AppE (VarE 'return) $ mkTupEOrExp $ List.map (\rterm -> case rterm of
                     ReqField table field _ _ ->
                         mkExprTF (isTableOptional table) table field -- TODO: Does the option matter here??? XXX
                         -- mkExprTF False table field -- TODO: Does the option matter here??? XXX
-                    ReqEntity ent _ _ -> 
+                    ReqEntity ent _ _ ->
                         VarE $ varNameTable ent
-                ) terms 
+                ) terms
           in
-          BindS (VarP res) $ AppE (VarE 'Esq.select) $ AppE (VarE 'Esq.from) $ 
-            LamE [mkQueryPatternTables tables] $ DoE 
-                ((mkOnTables isTableOptional tables) 
-                ++ (mkWhere isTableOptional $ commandWhere normalized) 
+          BindS (VarP res) $ AppE (VarE 'Esq.select) $ AppE (VarE 'Esq.from) $
+            LamE [mkQueryPatternTables tables] $ DoE
+                ((mkOnTables isTableOptional tables)
+                ++ (mkWhere isTableOptional $ commandWhere normalized)
                 ++ (mkOrderBy isTableOptional $ commandOrderBy normalized)
                 ++ (mkLimit $ commandLimit normalized)
                 ++ (mkOffset $ commandOffset normalized)
                 ++ [NoBindS returns])
-    let taint = 
-          let fun = 
-                let pat = TupP $ List.map ( \rterm -> 
+    let taint =
+          let fun =
+                let pat = mkTupPOrPat $ List.map ( \rterm ->
                         let constr = case rterm of
                               ReqField table field _ _ ->
                                 ConP 'Value [VarP $ varNameTableField table field]
@@ -182,18 +208,18 @@ generateSql lEntityDefs s =
                                     mkEntityPattern table
                         in
                         constr
-                      ) terms 
+                      ) terms
                 in
-                let body = 
-                      let getExpr table field = 
-                            let res = List.foldl' ( \acc rterm -> maybe ( case rterm of 
+                let body =
+                      let getExpr table field =
+                            let res = List.foldl' ( \acc rterm -> maybe ( case rterm of
                                     ReqField table' field' _ _
                                       | table == table' && field == field' ->
                                         Just $ VarE $ varNameTableField table field
                                     ReqEntity table' optional _
                                       | table == table' ->
                                         -- TODO: implement this FIXME XXX
-                                        let expr = 
+                                        let expr =
                                               if field == "id" then
                                                 VarE $ varNameTableField table field
                                               else
@@ -201,26 +227,26 @@ generateSql lEntityDefs s =
                                                 AppE (VarE getter) $ VarE $ varNameTable table
                                         in
                                         Just $ if optional then
-                                            -- Here we assert that the field is not Nothing, since we know that is optional. Warning: If this assertion is wrong, things could fail at runtime. 
+                                            -- Here we assert that the field is not Nothing, since we know that is optional. Warning: If this assertion is wrong, things could fail at runtime.
                                             let body = AppE (VarE 'fromJust) (VarE $ varNameTableField table' "maybe") in
                                             LetE [ValD (mkEntityPattern table') (NormalB body) []] expr
                                         else
                                             expr
                                     _ ->
                                         acc
-                                    
-                                  ) Just acc ) Nothing terms 
+
+                                  ) Just acc ) Nothing terms
                             in
                             maybe (error $ "Could not find expression for table `"++table++"` and field `"++field++"`") id res
                       in
                       let taints = List.foldr (\rterm acc -> case rterm of
-                                ReqField _ _ False _ -> 
+                                ReqField _ _ False _ ->
                                     acc
-                                ReqField _ _ _ Nothing -> 
+                                ReqField _ _ _ Nothing ->
                                     acc
-                                ReqField table field _returning (Just deps) -> 
+                                ReqField table field _returning (Just deps) ->
                                     let labeler = VarE $ mkName $ "readLabel" ++ (headToUpper table) ++ (headToUpper field) ++ "'" in
-                                    let label = List.foldl' (\acc (table',field') -> 
+                                    let label = List.foldl' (\acc (table',field') ->
                                             AppE acc $ getExpr table' field'
                                           ) labeler deps
                                     in
@@ -255,16 +281,16 @@ generateSql lEntityDefs s =
                                                 nonoptionCase $ VarE 'raiseLabelRead
                                     in
                                     stmt:acc
-                            ) [] terms 
+                            ) [] terms
                       in
-                      let returns = NoBindS $ AppE (VarE 'return) $ TupE $ List.foldr (\rterm acc -> case rterm of
-                                ReqField table field ret _ -> 
+                      let returns = NoBindS $ AppE (VarE 'return) $ mkTupEOrExp $ List.foldr (\rterm acc -> case rterm of
+                                ReqField table field ret _ ->
                                     if ret then
                                         let vName = (if protected then varNameTableFieldP else varNameTableField) table field in
                                         (VarE vName):acc
                                     else
                                         acc
-                                ReqEntity table optional _ -> 
+                                ReqEntity table optional _ ->
                                     let name = if protected then
                                             varNameTableP table
                                           else
@@ -276,21 +302,21 @@ generateSql lEntityDefs s =
                                     (VarE name):acc
                             ) [] terms
                       in
+
                       DoE $ taints ++ [returns]
                 in
                 LamE [pat] body
           in
           NoBindS $ AppE (VarE 'lift)$ AppE (AppE (VarE 'mapM) fun) (VarE res)
 
-    -- error $ pprint $ DoE [ query, taint]
     return $ DoE [ query, taint]
 
     where
-        mkEntityPattern table = 
+        mkEntityPattern table =
             AsP (varNameTableE table) $ ConP 'Entity [ VarP $ varNameTableField table "id", VarP $ varNameTable table]
 
         mkQueryPatternTables (Table table) = VarP $ varNameTable table
-        mkQueryPatternTables (Tables ts j table _) = 
+        mkQueryPatternTables (Tables ts j table _) =
             let constr = case j of
                   InnerJoin -> 'Esq.InnerJoin
                   LeftOuterJoin -> 'Esq.LeftOuterJoin
@@ -303,10 +329,10 @@ generateSql lEntityDefs s =
         mkWhere _ Nothing = []
         mkWhere isTableOptional (Just (Where expr)) = [NoBindS $ AppE (VarE 'Esq.where_) $ mkExprBExpr isTableOptional expr]
 
-        -- hasLabelsHelper tableS f = List.foldl' (\acc ent -> 
+        -- hasLabelsHelper tableS f = List.foldl' (\acc ent ->
         --     if acc || (lEntityHaskell ent) /= tableS then
-        --         acc 
-        --     else 
+        --         acc
+        --     else
         --         List.foldl' (\acc field ->
         --             if acc || f field then
         --                 acc
@@ -318,8 +344,8 @@ generateSql lEntityDefs s =
         -- hasLabelsTableField tableS fieldS = hasLabelsHelper tableS $ \f -> (lFieldHaskell f) /= fieldS
 
         mkOrderBy _ Nothing = []
-        mkOrderBy isTableOptional (Just (OrderBy ords')) = 
-            let helper ord = 
+        mkOrderBy isTableOptional (Just (OrderBy ords')) =
+            let helper ord =
                   let ( op,( table, field)) = case ord of
                         OrderAsc t -> ( 'Esq.asc, extractTableField t)
                         OrderDesc t -> ( 'Esq.desc, extractTableField t)
@@ -332,16 +358,16 @@ generateSql lEntityDefs s =
 
         mkLimit Nothing = []
         mkLimit (Just (Limit limit)) = [NoBindS $ AppE (VarE 'Esq.limit) $ LitE $ IntegerL limit]
-        
+
         mkOffset Nothing = []
         mkOffset (Just (Offset offset)) = [NoBindS $ AppE (VarE 'Esq.offset) $ LitE $ IntegerL offset]
 
         mkOnTables _ (Table _table) = []
-        mkOnTables isTableOptional (Tables ts _ _ bexpr@(BExprBinOp (BTerm _term1) BinEq (BTerm _term2))) = 
+        mkOnTables isTableOptional (Tables ts _ _ bexpr@(BExprBinOp (BTerm _term1) BinEq (BTerm _term2))) =
             (NoBindS $ AppE (VarE 'Esq.on) $ mkExprBExpr isTableOptional bexpr):(mkOnTables isTableOptional ts)
         mkOnTables _ (Tables _ _ table _) = error $ "mkOnTables: Invalid on expression for table `" ++ table ++ "`"
 
-        mkExprBExpr isTableOptional (BExprBinOp (BTerm term1) op' (BTerm term2)) = 
+        mkExprBExpr isTableOptional (BExprBinOp (BTerm term1) op' (BTerm term2)) =
             let (table1,field1) = extractTableField term1 in
             let (table2,field2) = extractTableField term2 in
             let tableOptional1 = isTableOptional table1 in -- TODO: This is probably incorrect?? Need to consider the relationship between the two tables? XXX
@@ -365,9 +391,9 @@ generateSql lEntityDefs s =
             parenInfixE expr1 op expr2
         mkExprBExpr isTableOptional (BExprBinOp b1 op b2) = parenInfixE
             (mkExprB isTableOptional b1) (mkExprBOp op) (mkExprB isTableOptional b2)
-        mkExprBExpr isTableOptional (BExprAnd e1 e2) = parenInfixE 
+        mkExprBExpr isTableOptional (BExprAnd e1 e2) = parenInfixE
             (mkExprBExpr isTableOptional e1) (VarE '(Esq.&&.)) (mkExprBExpr isTableOptional e2)
-        mkExprBExpr isTableOptional (BExprOr e1 e2) = parenInfixE 
+        mkExprBExpr isTableOptional (BExprOr e1 e2) = parenInfixE
             (mkExprBExpr isTableOptional e1) (VarE '(Esq.||.)) (mkExprBExpr isTableOptional e2)
         mkExprBExpr isTableOptional (BExprNull t) = AppE (VarE 'Esq.isNothing) $ mkExprTerm isTableOptional t
         mkExprBExpr isTableOptional (BExprNotNull t) = AppE (VarE 'Esq.not_) $ AppE (VarE 'Esq.isNothing) $ mkExprTerm isTableOptional t
@@ -384,7 +410,7 @@ generateSql lEntityDefs s =
         mkExprB _ (BAnti s) = case Meta.parseExp s of
             Left e -> error e
             Right e -> AppE (VarE 'Esq.val) $ e
-        mkExprB _ (BConst c) = mkExprConst c 
+        mkExprB _ (BConst c) = mkExprConst c
 
         mkExprConst (CBool True) = AppE (VarE 'Esq.val) $ ConE 'True
         mkExprConst (CBool False) = AppE (VarE 'Esq.val) $ ConE 'False
@@ -392,19 +418,19 @@ generateSql lEntityDefs s =
         mkExprConst (CInt i) = AppE (VarE 'Esq.val) $ LitE $ IntegerL i
         mkExprConst (CDouble d) = AppE (VarE 'Esq.val) $ LitE $ DoublePrimL $ toRational d
 
-        mkExprTF tableOptional table field = 
+        mkExprTF tableOptional table field =
             let op = VarE $ if tableOptional then '(Esq.?.) else '(Esq.^.) in
             let fieldName = constrNameTableField table field in
             let var = varNameTable table in
             parenInfixE (VarE var) op (ConE fieldName)
 
-        mkExprTerm isTableOptional term = 
+        mkExprTerm isTableOptional term =
             let (tableS, fieldS) = extractTableField term in
             mkExprTF (isTableOptional tableS) tableS fieldS
 
-        getLTable tableS = 
+        getLTable tableS =
             let findEntity [] = error $ "Could not find table `" ++ tableS ++ "`"
-                findEntity (h:t) = 
+                findEntity (h:t) =
                     if toLowerString (lEntityHaskell h) == toLowerString tableS then
                         h
                     else
@@ -412,14 +438,14 @@ generateSql lEntityDefs s =
             in
             findEntity lEntityDefs
 
-        getLTableField tableS fieldS = 
+        getLTableField tableS fieldS =
             if fieldS == "id" then
                 let typ = FTTypeCon Nothing (Text.pack $ tableS ++ "Id") in
                 LFieldDef fieldS typ True Nothing
             else
                 let ent = getLTable tableS in
                 let findField [] = error $ "Could not find field `" ++ fieldS ++ "` for table `" ++ tableS ++ "`"
-                    findField (h:t) = 
+                    findField (h:t) =
                         if toLowerString (lFieldHaskell h) == toLowerString fieldS then
                             h
                         else
@@ -447,12 +473,12 @@ generateSql lEntityDefs s =
         varNameTableFieldP table field = mkName $ '_':'p':'_':((toLowerString table) ++ ('_':(toLowerString field)))
         constrNameTableField table field = mkName $ (headToUpper table) ++ (headToUpper field)
 
-        reqTermsCommand isTableOptional (Command _ terms tables whereM orderByM _limitM _offsetM) = 
+        reqTermsCommand isTableOptional (Command _ terms tables whereM orderByM _limitM _offsetM) =
             -- Get all requested terms
             --    transform to ReqTerm
             -- get the dependencies of all the other terms
             --    union (and transform) into rest of dependency terms, requested false
-            let terms' = case terms of 
+            let terms' = case terms of
                   Terms terms -> terms
                   TermsAll -> error "reqTermsCommand: normalization failed"
             in
@@ -474,7 +500,7 @@ generateSql lEntityDefs s =
         reqTermsWhere isTableOptional curTerms (Where bexpr) = reqTermsBExpr isTableOptional curTerms bexpr
 
         reqTermsTables :: (String -> Bool) -> [ReqTerm] -> Tables -> [ReqTerm]
-        reqTermsTables isTableOptional curTerms (Tables ts _ _ bexpr) = 
+        reqTermsTables isTableOptional curTerms (Tables ts _ _ bexpr) =
             reqTermsTables isTableOptional (reqTermsBExpr isTableOptional curTerms bexpr) ts
         reqTermsTables _ curTerms (Table _) = curTerms
 
@@ -492,7 +518,7 @@ generateSql lEntityDefs s =
 
         -- Union in new term. Term should never be an entity.
         reqTermsTermMaybe :: (String -> Bool) -> [ReqTerm] -> Term -> [ReqTerm]
-        reqTermsTermMaybe isTableOptional curTerms term = 
+        reqTermsTermMaybe isTableOptional curTerms term =
             let ( tableS, fieldS) = extractTableField term in
             let reqTerm = reqTermsTerm isTableOptional False term in
             let cons = List.foldl' (\acc term -> case term of
@@ -521,12 +547,12 @@ generateSql lEntityDefs s =
                             ( tableS, "id"):acc
                         LAConst _s ->
                             acc
-                        LAField f -> 
+                        LAField f ->
                             ( tableS, f):acc
                       ) [] anns ) $ lFieldLabelAnnotations fieldDef in
                 ReqField tableS fieldS returning dep
             FieldAll ->
-                let hasDeps = 
+                let hasDeps =
                       let ent = getLTable tableS in
                       List.foldl' (\acc f -> acc || isJust (lFieldLabelAnnotations f)) False $ lEntityFields ent
                 in
@@ -555,7 +581,7 @@ generateSql lEntityDefs s =
         -- fullOuterJoin = VarE $ mkName "FullOuterJoin"
         -- crossJoin = VarE $ mkName "CrossJoin"
 
-data ReqTerm = 
+data ReqTerm =
     ReqField {
         _reqFieldTable :: String
       , _reqFieldField :: String
@@ -572,11 +598,11 @@ data ReqTerm =
 
     deriving (Show)
 
--- | Normalize an AST by adding table name for all terms. Also expands out all the tables requested when TermsAll is applied. 
+-- | Normalize an AST by adding table name for all terms. Also expands out all the tables requested when TermsAll is applied.
 normalizeTerms :: Command -> Command
-normalizeTerms (Command select terms tables whereM orderByM limitM offsetM) = 
-    -- Get the default table if there are no joins. 
-    let defTable = case tables of 
+normalizeTerms (Command select terms tables whereM orderByM limitM offsetM) =
+    -- Get the default table if there are no joins.
+    let defTable = case tables of
           Table table ->
             Just table
           _ ->
@@ -584,7 +610,7 @@ normalizeTerms (Command select terms tables whereM orderByM limitM offsetM) =
     in
     let terms' = case terms of
           TermsAll ->
-            -- Expand all the tables out. 
+            -- Expand all the tables out.
             let expander acc tables = case tables of
                   Table table ->
                     (TermTF table FieldAll):acc
@@ -592,20 +618,20 @@ normalizeTerms (Command select terms tables whereM orderByM limitM offsetM) =
                     expander ((TermTF table FieldAll):acc) tables
             in
             Terms $ expander [] tables
-          Terms terms' -> 
-            -- Add table name to each term. 
+          Terms terms' ->
+            -- Add table name to each term.
             Terms $ List.map (updateTerm defTable) terms'
     in
-    -- This checks that terms should already have tables included. 
+    -- This checks that terms should already have tables included.
     let tables' = updateTables defTable tables in
-    let whereM' = case whereM of 
-          Just (Where bexpr) -> 
+    let whereM' = case whereM of
+          Just (Where bexpr) ->
             Just $ Where $ updateBExpr defTable bexpr
-          Nothing -> 
+          Nothing ->
             Nothing
     in
     let orderByM' = case orderByM of
-          Just (OrderBy orders) -> 
+          Just (OrderBy orders) ->
             let helper ord = case ord of
                   OrderAsc t ->
                     OrderAsc $ updateTerm defTable t
@@ -613,7 +639,7 @@ normalizeTerms (Command select terms tables whereM orderByM limitM offsetM) =
                     OrderDesc $ updateTerm defTable t
             in
             Just $ OrderBy $ List.map helper orders
-          Nothing -> 
+          Nothing ->
             Nothing
     in
     Command select terms' tables' whereM' orderByM' limitM offsetM
@@ -621,13 +647,13 @@ normalizeTerms (Command select terms tables whereM orderByM limitM offsetM) =
     where
         updateTerm defTable term = case term of
             TermF field ->
-                maybe 
+                maybe
                     (error $ "Could not infer table associated with field `" ++ (show field) ++ "`")
                     (\table -> TermTF table field)
                     defTable
             _ ->
                 term
-        
+
         updateTables defTable (Tables ts j table bexpr) =
             Tables (updateTables defTable ts) j table $ updateBExpr defTable bexpr
         updateTables _ t = t
@@ -658,7 +684,7 @@ lsqlHelper' :: [LEntityDef] -> QuasiQuoter
 lsqlHelper' ents = QuasiQuoter {
         quoteExp = (generateSql' ents) . Text.pack
     }
-    where 
+    where
         generateSql' e s = do
             res <- generateSql e s
             error $ pprint res

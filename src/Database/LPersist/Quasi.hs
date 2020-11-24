@@ -19,7 +19,7 @@
 -- OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 -- WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 --
--- Modified by James Parker in 2014. 
+-- Modified by James Parker in 2014.
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE CPP #-}
@@ -99,8 +99,8 @@ parseFieldType t0 =
             PSSuccess x t' -> goMany (front . (x:)) t'
             PSFail err -> PSFail err
             PSDone -> PSSuccess (front []) t
-            -- _ -> 
--- 
+            -- _ ->
+--
 -- data PersistSettings = PersistSettings
 --     { psToDBName :: !(Text -> Text)
 --     , psStrictFields :: !Bool
@@ -114,16 +114,16 @@ parseFieldType t0 =
 --     --
 --     -- Since 2.0
 --     }
--- 
+--
 -- defaultPersistSettings, upperCaseSettings, lowerCaseSettings :: PersistSettings
 -- defaultPersistSettings = PersistSettings
 --     { psToDBName = id
 --     , psStrictFields = True
 --     , psIdName       = "id"
 --     }
--- 
+--
 -- upperCaseSettings = defaultPersistSettings
--- 
+--
 -- lowerCaseSettings = defaultPersistSettings
 --     { psToDBName =
 --         let go c
@@ -200,9 +200,9 @@ tokenize t
              in parens count y (front . (x:))
 
     chevrons t' front
-        | T.null t' = error $ T.unpack $ T.concat $ 
+        | T.null t' = error $ T.unpack $ T.concat $
             "Unterminated chevrons string starting with " : front []
-        | T.head t' == '>' = 
+        | T.head t' == '>' =
             Token (T.concat $ front []) : tokenize (T.tail t')
         | T.head t' == '\\' && T.length t' > 1 =
             quotes (T.drop 2 t') (front . (T.take 1 (T.drop 1 t'):))
@@ -348,6 +348,7 @@ mkEntityDef ps name entattribs lines =
         derives
         extras
         isSum
+        Nothing
   where
     entName = HaskellName name'
     (isSum, name') =
@@ -359,12 +360,12 @@ mkEntityDef ps name entattribs lines =
     attribPrefix = flip lookupKeyVal entattribs
     idName | Just _ <- attribPrefix "id" = error "id= is deprecated, ad a field named 'Id' and use sql="
            | otherwise = Nothing
-            
-    (idField, primaryComposite, uniqs, foreigns) = foldl' (\(mid, mp, us, fs) attr -> 
-        let (i, p, u, f) = takeConstraint ps name' cols attr 
+
+    (idField, primaryComposite, uniqs, foreigns) = foldl' (\(mid, mp, us, fs) attr ->
+        let (i, p, u, f) = takeConstraint ps name' cols attr
             squish xs m = xs `mappend` maybeToList m
         in (just1 mid i, just1 mp p, squish us u, squish fs f)) (Nothing, Nothing, [],[]) attribs
-                                    
+
     derives = concat $ mapMaybe takeDerives attribs
 
     cols :: [FieldDef]
@@ -381,7 +382,7 @@ just1 :: (Show x) => Maybe x -> Maybe x -> Maybe x
 just1 (Just x) (Just y) = error $ "expected only one of: "
   `mappend` show x `mappend` " " `mappend` show y
 just1 x y = x `mplus` y
-                
+
 
 mkAutoIdField :: PersistSettings -> HaskellName -> Maybe DBName -> SqlType -> FieldDef
 mkAutoIdField ps entName idName idSqlType = FieldDef
@@ -392,10 +393,11 @@ mkAutoIdField ps entName idName idSqlType = FieldDef
       , fieldDB = fromMaybe (DBName $ psIdName ps) idName
       , fieldType = FTTypeCon Nothing $ keyConName $ unHaskellName entName
       , fieldSqlType = idSqlType
-      -- the primary field is actually a reference to the entity
-      , fieldReference = ForeignRef entName (FTTypeCon Nothing "Int")
       , fieldAttrs = []
       , fieldStrict = True
+      , fieldReference = ForeignRef entName (FTTypeCon Nothing "Int")
+      , fieldComments = Nothing
+      -- the primary field is actually a reference to the entity
       }
 
 keyConName :: Text -> Text
@@ -430,6 +432,7 @@ takeCols onErr ps (n':typ:rest)
                 , fieldAttrs = rest
                 , fieldStrict = fromMaybe (psStrictFields ps) mstrict
                 , fieldReference = NoReference
+                , fieldComments = Nothing
                 }
   where
     (mstrict, n)
@@ -447,9 +450,9 @@ takeConstraint :: PersistSettings
           -> [FieldDef]
           -> [Text]
           -> (Maybe FieldDef, Maybe CompositeDef, Maybe UniqueDef, Maybe UnboundForeignDef)
-takeConstraint ps tableName defs (n:rest) | not (T.null n) && isUpper (T.head n) = takeConstraint' 
+takeConstraint ps tableName defs (n:rest) | not (T.null n) && isUpper (T.head n) = takeConstraint'
     where
-      takeConstraint' 
+      takeConstraint'
             | n == "Unique"  = (Nothing, Nothing, Just $ takeUniq ps tableName defs rest, Nothing)
             | n == "Foreign" = (Nothing, Nothing, Nothing, Just $ takeForeign ps tableName defs rest)
             | n == "Primary" = (Nothing, Just $ takeComposite defs rest, Nothing, Nothing)
@@ -479,7 +482,7 @@ takeId ps tableName (n:rest) = fromMaybe (error "takeId: impossible!") $ setFiel
     setIdName = ["sql=" `mappend` psIdName ps]
 takeId _ tableName _ = error $ "empty Id field for " `mappend` show tableName
 
-    
+
 takeComposite :: [FieldDef]
               -> [Text]
               -> CompositeDef
@@ -495,7 +498,7 @@ takeComposite fields pkcols
         | fieldHaskell d == HaskellName t = d
         | otherwise = getDef ds t
 
--- Unique UppercaseConstraintName list of lowercasefields    
+-- Unique UppercaseConstraintName list of lowercasefields
 takeUniq :: PersistSettings
           -> Text
           -> [FieldDef]

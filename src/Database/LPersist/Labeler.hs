@@ -12,7 +12,7 @@ import Prelude
 
 import Internal
 
--- | Functions that use TH to generate labeling code. 
+-- | Functions that use TH to generate labeling code.
 -- All examples in this documentation reference the following Persist model:
 --
 --   User
@@ -20,12 +20,12 @@ import Internal
 --       password Text
 --       email Text <Const Admin || Id, Id, _>
 --       admin Bool
---   
+--
 --       UniqueEmail email
 --       deriving Typeable
 
 mkLabels :: String -> [EntityDef] -> Q [Dec]
-mkLabels labelS ents = 
+mkLabels labelS ents =
     let entsL = map toLEntityDef ents in
     let labelFs' = concat $ map (mkLabelEntity' labelType) entsL in
     do
@@ -37,7 +37,7 @@ mkLabels labelS ents =
     return $ concat [concat labelFs, labelFs', lEntityInstance, protected, protectedInstance] -- , serializedLEntityDef]
 
     where
-        labelType = 
+        labelType =
             case Text.words $ Text.pack labelS of
                 [] ->
                     error $ "Label `" ++ labelS ++ "` not found"
@@ -54,10 +54,10 @@ mkLabels labelS ents =
 mkLabels' :: String -> [EntityDef] -> Q [Dec]
 mkLabels' labelS ents = do
     labels <- mkLabels labelS ents
-    fail $ show $ pprint labels
+    fail $ pprint labels
 
 
--- | Create protected ADTs for the models in Persist's DSL. 
+-- | Create protected ADTs for the models in Persist's DSL.
 -- Ex: ProtectedUser is created for protected version of User.
 --
 -- data ProtectedUser = ProtectedUser {
@@ -75,7 +75,7 @@ mkProtectedEntity labelType ent =
     where
         eName = lEntityHaskell ent
         pName = mkName $ "Protected" ++ eName
-        mkProtectedField field = 
+        mkProtectedField field =
             let fName = mkName $ 'p':(eName ++ (headToUpper (lFieldHaskell field))) in
             let strict = Bang NoSourceUnpackedness $ if lFieldStrict field then SourceStrict else NoSourceStrictness in
             let rawType = fieldTypeToType $ lFieldType field in
@@ -93,7 +93,7 @@ mkProtectedEntity labelType ent =
 -- Ex:
 --
 -- instance LEntity (DCLabel Principal) User where
---     getLabelRead _e = 
+--     getLabelRead _e =
 --         readLabelUserEmail _e
 --     getLabelWrite _e =
 --         writeLabelUserEmail _e
@@ -101,9 +101,9 @@ mkProtectedEntity labelType ent =
 --         createLabelUserEmail _e
 
 mkLEntityInstance :: Type -> LEntityDef -> Q Dec
-mkLEntityInstance labelType ent = 
+mkLEntityInstance labelType ent =
     let expr = List.foldl' mkStmts Nothing (lEntityFields ent) in
-    let (rExpr, wExpr, cExpr) = case expr of 
+    let (rExpr, wExpr, cExpr) = case expr of
           Nothing ->
             ( bottom, bottom, bottom)
           Just exprs ->
@@ -123,9 +123,9 @@ mkLEntityInstance labelType ent =
         bottom = VarE $ mkName "bottom"
         appJoin = AppE . (AppE (VarE (mkName "lub")))
         mkStmts acc field = case lFieldLabelAnnotations field of
-            Nothing -> 
+            Nothing ->
                 acc
-            _ -> 
+            _ ->
                 let baseName = eName ++ (headToUpper (lFieldHaskell field)) in
                 let rExpr = AppE (VarE (mkName ("readLabel"++baseName))) (VarE e) in
                 let wExpr = AppE (VarE (mkName ("writeLabel"++baseName))) (VarE e) in
@@ -138,7 +138,7 @@ mkLEntityInstance labelType ent =
 
 
 
--- | Creates functions that get labels for each field in an entity. 
+-- | Creates functions that get labels for each field in an entity.
 -- Ex:
 --
 -- readLabelUserEmail :: Entity User -> DCLabel Principal
@@ -146,18 +146,18 @@ mkLEntityInstance labelType ent =
 --     ((toConfidentialityLabel "Admin") `glb` (toConfidentialityLabel _eId))
 --
 -- createLabelUserEmail :: Entity User -> DCLabel Principal
--- createLabelUserEmail (Entity _eId _entity) = 
+-- createLabelUserEmail (Entity _eId _entity) =
 --     toIntegrityLabel _eId
 --
 -- writeLabelUserEmail :: Entity User -> DCLabel Principal
--- writeLabelUserEmail (Entity _eId _entity) = 
+-- writeLabelUserEmail (Entity _eId _entity) =
 --     bottom
 
 mkLabelEntity :: Type -> LEntityDef -> Q [Dec]
-mkLabelEntity labelType ent = 
+mkLabelEntity labelType ent =
     let labelFs = map mkLabelField (lEntityFields ent) in
     return $ concat labelFs
-    
+
     where
         eName = lEntityHaskell ent
         toConfLabel = VarE $ mkName "toConfidentialityLabel"
@@ -167,7 +167,7 @@ mkLabelEntity labelType ent =
         combAnnotations f eId e l = case l of
             [] ->
                 bottom
-            h:t -> 
+            h:t ->
                 let appF ann = case ann of
                       LAId ->
                         AppE f $ VarE eId
@@ -178,8 +178,8 @@ mkLabelEntity labelType ent =
                         AppE f $ AppE getter $ VarE e
                 in
                 List.foldl' (\acc ann -> appMeet acc $ appF ann) (appF h) t
-            
-        mkLabelField field = 
+
+        mkLabelField field =
             case lFieldLabelAnnotations field of
                 Nothing ->
                     []
@@ -203,19 +203,19 @@ mkLabelEntity labelType ent =
 
 
 
--- | Similar to mkLabelEntity, except this function creates code that returns the labels given what the label depends on instead of the entire entity. 
+-- | Similar to mkLabelEntity, except this function creates code that returns the labels given what the label depends on instead of the entire entity.
 -- Ex:
 --
 -- readLabelUserEmail' :: UserId -> DCLabel Principal
--- readLabelUserEmail' uId = 
+-- readLabelUserEmail' uId =
 --     ((toConfidentialityLabel "Admin") `glb` (toConfidentialityLabel uId))
 --
 -- writeLabelUserEmail' :: UserId -> DCLabel Principal
--- writeLabelUserEmail' uId = 
+-- writeLabelUserEmail' uId =
 --     (toIntegrityLabel uId)
 --
 -- createLabelUserEmail' :: DCLabel Principal
--- createLabelUserEmail' = 
+-- createLabelUserEmail' =
 --     bottom
 
 mkLabelEntity' :: Type -> LEntityDef -> [Dec]
@@ -236,25 +236,25 @@ mkLabelEntity' labelType ent =
                   LAId ->
                     let name = mkName $ eName ++ "Id" in
                     AppT (AppT ArrowT (ConT name)) acc
-                  LAField s -> 
+                  LAField s ->
                     let typ = getLEntityFieldType ent s in
                     AppT (AppT ArrowT typ) acc
             in
             List.foldr helper labelType
-        mkPattern = 
+        mkPattern =
             let helper annotation acc = case annotation of
                   LAConst _ ->
                     acc
-                  LAId -> 
+                  LAId ->
                     (VarP $ mkName "_id"):acc
                   LAField s ->
                     (VarP $ mkName $ "_" ++ s):acc
             in
             List.foldr helper []
         mkBody f anns = case anns of
-            [] -> 
+            [] ->
                 bottom
-            h:t -> 
+            h:t ->
                 let appF ann = case ann of
                       LAId ->
                         AppE f $ VarE $ mkName "_id"
@@ -264,7 +264,7 @@ mkLabelEntity' labelType ent =
                         AppE f $ VarE $ mkName $ "_" ++ fName
                 in
                 List.foldl' (\acc ann -> appMeet acc $ appF ann) (appF h) t
-        mkLabelField' field = 
+        mkLabelField' field =
             case lFieldLabelAnnotations field of
                 Nothing ->
                     []
@@ -290,7 +290,7 @@ mkLabelEntity' labelType ent =
 --     toProtected _entity@(Entity _eId _e) = do
 --         let ident = userIdent _e
 --         let password = userPassword _e
---         email <- 
+--         email <-
 --             let l = readLabelUserEmail _entity in
 --             toLabeledTCB l $ do
 --                 taintLabel l
@@ -305,10 +305,11 @@ mkProtectedEntityInstance labelType ent = do
     let body = DoE $ fStmts ++ [NoBindS (AppE (VarE (mkName "return")) recordCons)]
     let toProtected = FunD (mkName "toProtected") [Clause [AsP entity (ConP (mkName "Entity") [VarP eId,VarP e])] (NormalB body) []]
     let inst = InstanceD Nothing [] (AppT (AppT (ConT (mkName "ProtectedEntity")) labelType) (ConT (mkName eName))) [toProtected]
-    let typInst = TySynInstD (mkName "Protected") $ TySynEqn [ConT (mkName eName)] (ConT $ mkName pName)
+    -- let typInst = TySynInstD (mkName "Protected") $ TySynEqn [ConT (mkName eName)] (ConT $ mkName pName)
+    let typInst = TySynInstD $ TySynEqn Nothing (AppT (ConT (mkName "Protected")) (ConT (mkName eName))) (ConT $ mkName pName)
     return [inst, typInst]
 
-    where 
+    where
         eName = lEntityHaskell ent
         pName = "Protected" ++ eName
         e = mkName "_e"
@@ -338,27 +339,26 @@ mkProtectedEntityInstance labelType ent = do
 
 
 fieldTypeToType :: FieldType -> Type
-fieldTypeToType (FTTypeCon Nothing con) = 
+fieldTypeToType (FTTypeCon Nothing con) =
     ConT $ mkName $ Text.unpack con
-fieldTypeToType (FTTypeCon (Just mod) con) = 
+fieldTypeToType (FTTypeCon (Just mod) con) =
     ConT $ mkName $ (Text.unpack mod) ++ "." ++ Text.unpack con
-fieldTypeToType (FTApp f x) = 
+fieldTypeToType (FTApp f x) =
     AppT (fieldTypeToType f) (fieldTypeToType x)
-fieldTypeToType (FTList x) = 
+fieldTypeToType (FTList x) =
     AppT ListT $ fieldTypeToType x
 
 getLEntityFieldType :: LEntityDef -> String -> Type
-getLEntityFieldType ent fName = 
-    let ftype = List.foldl' (\acc f -> case (acc, lFieldHaskell f) of 
-            (Nothing, s) | s == fName -> 
+getLEntityFieldType ent fName =
+    let ftype = List.foldl' (\acc f -> case (acc, lFieldHaskell f) of
+            (Nothing, s) | s == fName ->
                 Just $ fieldTypeToType $ lFieldType f
             _ ->
                 acc
-          ) Nothing $ lEntityFields ent 
+          ) Nothing $ lEntityFields ent
     in
-    case ftype of 
+    case ftype of
         Nothing ->
             error $ "getLEntityFieldType: Could not find find field `" ++ fName ++"` in entity `"++ (lEntityHaskell ent) ++"`"
         Just f ->
             f
-
